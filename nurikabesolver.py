@@ -294,6 +294,7 @@ def main():
     print(this_board)
     this_board.solve()
     print(this_board)
+    print("done!")
 
     
 
