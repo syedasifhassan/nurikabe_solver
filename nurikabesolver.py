@@ -216,9 +216,11 @@ class Unassigned(CellGroup):
 
 class Board():
     def __init__(self,board_str_lines):
-        self._N = len(board_str_lines)
+        self._Y = len(board_str_lines)
+        self._X = len(board_str_lines[0]) #Assumed here that every line has the same number of chars
         self._islands = []
         self._orphan_islands = []
+        self._complete_islands = []
         self._nurikabe = []
         self._unassigned = [Unassigned(self)]
         board_rows = []
@@ -245,7 +247,7 @@ class Board():
             y += 1
 
     def __str__(self):
-        board_rows = [[' ' for i in range(0,self._N)] for j in range(0,self._N)]
+        board_rows = [[' ' for i in range(0,self._X)] for j in range(0,self._Y)]
         for each_group in itertools.chain(self._islands,self._nurikabe,self._unassigned):
             for each_cell in each_group.members:
                 board_rows[each_cell.y][each_cell.x] = str(each_cell)
@@ -273,6 +275,15 @@ class Board():
             self._orphan_islands.remove(empty_group)
         if type(empty_group) is Nurikabe:
             self._nurikabe.remove(empty_group)
+
+    def is_solved(self):
+        if self.count_nurikabe()>1:
+            return False
+        if len(self._islands) or len(self._orphan_islands):
+            return False
+        if len(self._unassigned[0].members):
+            return False
+        return True
             
     def solve(self):
         # insert: quick reach check
@@ -294,8 +305,10 @@ def main():
     print(this_board)
     this_board.solve()
     print(this_board)
-    print("done!")
+    if this_board.is_solved():
+        print("solved!  :)")
+    else:
+        print("not solved!  :(")
 
     
-
 if __name__ == "__main__": main()
