@@ -184,7 +184,7 @@ class Island(CellGroup):
         if self.count is not None:
             other_group.merge_with(self)
         else:
-            super().merge_with(self,other_group)
+            super().merge_with(other_group)
     
     def is_complete(self):
         if len(self._members)==self._count: return True
@@ -218,14 +218,15 @@ class Island(CellGroup):
         if len(liberties)==1:
             print("    island",str(self),"has only one liberty",liberties[0].coords)
             self.board.queue_island_cell(liberties[0])
-        # check for a fork with a common neighbor
-#         if len(liberties)==2:
-#             if self.missing_cell_count()==1:
-#                 for each_liberty in liberties[0].liberties:
-#                     if each_liberty in liberties[1].liberties:
-#                         each_liberty.become_nurikabe()
-        # check for another island too close
         if self.count is not None:
+            # check for a fork with a common neighbor
+            if len(liberties)==2:
+                if self.missing_cell_count()==1:
+                    for each_liberty in liberties[0].liberties:
+                        if each_liberty in liberties[1].liberties:
+                            print("    found fork at",each_liberty.coords,"in",str(self))
+                            self.board.queue_nurikabe_cell(each_liberty)
+            # check for another island too close
             for each_liberty in liberties:
                 for next_liberty in each_liberty.liberties:
                     if next_liberty.group is not self and type(next_liberty.group) is Island and next_liberty.group.count is not None:
@@ -307,7 +308,7 @@ class Board():
             for each_cell in each_group.members:
                 board_rows[each_cell.y][each_cell.x] = str(each_cell)
                 board_rows[each_cell.y][each_cell.x + self._X + 5]= str(len(each_cell.liberties))
-                board_rows[each_cell.y][each_cell.x + 2*self._X + 10]= str(len(each_cell.group.liberties))
+                board_rows[each_cell.y][each_cell.x + 2*self._X + 10]= '{:2d}'.format(len(each_cell.group.liberties))
         board_lines = []
         for each_row in board_rows:
             board_lines.append(' '.join(each_row))
@@ -476,7 +477,7 @@ def main():
 --1-----------1----1
 1---1-2--2--1-------\
 '''
-    this_board = Board(board_str_lines=board_str4.split('\n'))
+    this_board = Board(board_str_lines=board_str5.split('\n'))
     print(this_board)
     this_board.solve()
 
