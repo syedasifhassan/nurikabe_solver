@@ -8,8 +8,8 @@ class Cell():
     def __init__(self,group,x,y):
         self._x = x
         self._y = y
-        self._liberties = []
-        self._connections = []
+        self._liberties = set([])
+        self._connections = set([])
         self._group = group
         group.add_member(self)
     
@@ -48,13 +48,13 @@ class Cell():
     def has_liberty(self,liberty):
         if liberty in self._liberties: return True
     def add_liberty(self,new_liberty):
-        if new_liberty not in self._liberties: self._liberties.append(new_liberty)
+        if new_liberty not in self._liberties: self._liberties.add(new_liberty)
     def del_liberty(self,lost_liberty):
         self._liberties.remove(lost_liberty)
         self._group.set_changed()
     def add_connection(self,new_connection):
         self.del_liberty(new_connection)
-        if new_connection not in self._connections: self._connections.append(new_connection)
+        if new_connection not in self._connections: self._connections.add(new_connection)
     def mutually_connect_to(self,new_connection):
         print("    cell at",self.coords,"mutually connecting to cell at",new_connection.coords)
         self.add_connection(new_connection)
@@ -103,8 +103,8 @@ class Cell():
 class CellGroup():
     def __init__(self,board):
         self._board = board
-        self._members = []
-        self._liberties = []
+        self._members = set([])
+        self._liberties = set([])
 
     def __str__(self):
         return str(type(self)) + str([each_cell.coords for each_cell in self._members])
@@ -125,10 +125,10 @@ class CellGroup():
         self._changed = True
         
     def add_member(self,new_cell):
-        self._members.append(new_cell)
+        self._members.add(new_cell)
         self.set_changed()
     def del_member(self,lost_member):
-        self._members.remove(lost_member)
+        self._members.discard(lost_member)
         if self._members:
             self.set_changed()
         else:
@@ -144,18 +144,14 @@ class CellGroup():
     
     def update_liberties(self):
         print("  updating liberties for group",str(self))
-        self._liberties = []
+        self._liberties.clear()
         for cell in self._members:
-            for liberty in cell.liberties:
-                if liberty not in self._liberties:
-                    self._liberties.append(liberty)
+            self._liberties.update(cell.liberties)
     
     def merge_with(self,other_group):
         print("      merging",str(self),"with",str(other_group))
-        L = len(self._members)
         while self._members:
-            L-= 1
-            self._members[L].group = other_group
+            self._members.pop().group = other_group
         
     def update(self):
         pass
@@ -164,6 +160,7 @@ class Island(CellGroup):
     def __init__(self,board,count=None):
         super().__init__(board)
         self._count=count
+        self._starting_cell = None
 
     def get_display_char(self, requesting_cell):
         if (self.starting_cell is requesting_cell) and self.count is not None:
@@ -185,12 +182,15 @@ class Island(CellGroup):
                 
     @property
     def starting_cell(self):
-        if self._members:
-            return self._members[0]
-        return None
+        return self._starting_cell
     @property
     def count(self):
         return self._count
+
+    def add_member(self,new_cell):
+        if not self._members:
+            self._starting_cell = new_cell
+        super().add_member(new_cell)
 
     def merge_with(self,other_group):
         # Note: assuming we're not trying to merge two groups both having a count.
@@ -229,14 +229,21 @@ class Island(CellGroup):
         liberties = self.liberties
         print("  island",str(self),"has",len(liberties),"liberties",self.liberty_coords)
         if len(liberties)==1:
-            print("    island",str(self),"has only one liberty",liberties[0].coords)
-            self.board.queue_island_cell(liberties[0])
+            for each_liberty in liberties:
+                print("    island",str(self),"has only one liberty",each_liberty.coords)
+                self.board.queue_island_cell(each_liberty)
         if self.count is not None:
             # check for a fork with a common neighbor
             if len(liberties)==2:
                 if self.missing_cell_count()==1:
-                    for each_liberty in liberties[0].liberties:
-                        if each_liberty in liberties[1].liberties:
+                    overlap = None
+                    for each_liberty in liberties:
+                        if overlap is None:
+                            overlap = each_liberty.liberties
+                        else:
+                            overlap = overlap & each_liberty.liberties
+                    if overlap:
+                        for each_liberty in overlap:
                             print("    found fork at",each_liberty.coords,"in",str(self))
                             self.board.queue_nurikabe_cell(each_liberty)
             # check for another island too close
@@ -265,8 +272,9 @@ class Nurikabe(CellGroup):
         print("  nurikabe",str(self),"has",len(liberties),"liberties",self.liberty_coords)
         if self.board.count_nurikabe() > 1:
             if len(liberties)==1:
-                print("  nurikabe at",self._members[0].coords,"has only one liberty",liberties[0].coords)
-                self.board.queue_nurikabe_cell(liberties[0])
+                for each_liberty in liberties:
+                    print("  nurikabe has only one liberty",each_liberty.coords)
+                    self.board.queue_nurikabe_cell(each_liberty)
 
 class Unassigned(CellGroup):
     def get_display_char(self, requesting_cell):
@@ -538,7 +546,7 @@ c-3------------5--2-
 1---------------2---\
 '''
 
-    this_board = Board(board_str_lines=board_str7.split('\n'))
+    this_board = Board(board_str_lines=board_str6.split('\n'))
     print(this_board)
     this_board.solve()
 
