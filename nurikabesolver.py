@@ -37,7 +37,8 @@ class Cell():
     @group.setter
     def group(self,new_group):
         if self._group is new_group: return
-        self._group.del_member(self)
+        if self._group is not None:
+            self._group.del_member(self)
         self._group = new_group
         new_group.add_member(self)
     @property
@@ -97,16 +98,13 @@ class Cell():
                 else:
                     self.group.merge_with(each_liberty.group)
         if type(self.group) is Unassigned:
-            self.group.board.create_new_island(self)
+            self.group.board.create_new_orphan_island(self)
         
 class CellGroup():
-    def __init__(self,board,starting_cell=None):
+    def __init__(self,board):
         self._board = board
         self._members = []
         self._liberties = []
-        if starting_cell is not None:
-            starting_cell.group = self
-#         self.set_changed()
 
     def __str__(self):
         return str(type(self)) + str([each_cell.coords for each_cell in self._members])
@@ -125,14 +123,17 @@ class CellGroup():
     def set_changed(self):
         # only self can turn the update flag off
         self._changed = True
-#         self.update_liberties()
         
     def add_member(self,new_cell):
         self._members.append(new_cell)
         self.set_changed()
     def del_member(self,lost_member):
         self._members.remove(lost_member)
-        self.set_changed()
+        if self._members:
+            self.set_changed()
+        else:
+            self.board.del_group(self)
+
     
     @property
     def liberties(self):
@@ -155,26 +156,38 @@ class CellGroup():
         while self._members:
             L-= 1
             self._members[L].group = other_group
-#             self._members[0].group = other_group
-        self.board.del_group(self)
         
     def update(self):
         pass
 
 class Island(CellGroup):
-    def __init__(self,board,starting_cell,count=None):
-        super().__init__(board,starting_cell)
-        self._starting_cell = starting_cell
+    def __init__(self,board,count=None):
+        super().__init__(board)
         self._count=count
 
     def get_display_char(self, requesting_cell):
-        if (self._starting_cell is requesting_cell) and self.count is not None:
-            return str(self.count)
+        if (self.starting_cell is requesting_cell) and self.count is not None:
+            return self.count_to_character()
         return 'O'
-    
+
+    @staticmethod
+    def character_to_count(character):
+        if character.isdigit():
+            return int(character)
+        else:
+            if character.isalpha():
+                return ord(character)-ord('a')+10
+        return False
+    def count_to_character(self):
+        if self.count<10:
+            return str(self.count)
+        return chr(self.count - 10 + ord('a'))
+                
     @property
     def starting_cell(self):
-        return self._starting_cell
+        if self._members:
+            return self._members[0]
+        return None
     @property
     def count(self):
         return self._count
@@ -202,8 +215,8 @@ class Island(CellGroup):
         return self._count - len(self._members)
     
     def quick_can_reach(self,test_cell):
-        delta_x = self._starting_cell.x - test_cell.x
-        delta_y = self._starting_cell.y - test_cell.y
+        delta_x = self.starting_cell.x - test_cell.x
+        delta_y = self.starting_cell.y - test_cell.y
         steps_to_reach = abs(delta_x) + abs(delta_y)
         # i.e. steps_to_reach + 1 <= self._count
         if steps_to_reach < self._count: return True
@@ -258,11 +271,6 @@ class Nurikabe(CellGroup):
 class Unassigned(CellGroup):
     def get_display_char(self, requesting_cell):
         return '-'
-    def set_changed(self):
-        pass
-    def del_member(self,lost_member):
-        self._members.remove(lost_member)
-        # don't need to update liberties
 
 
 class Board():
@@ -273,7 +281,7 @@ class Board():
         self._orphan_islands = []
         self._complete_islands = []
         self._nurikabe = []
-        self._unassigned = [Unassigned(self)]
+        self._unassigned = []
         self._island_cell_queue = deque()
         self._nurikabe_cell_queue = deque()
         print("initializing board")
@@ -284,7 +292,15 @@ class Board():
             board_row = []
             x=0
             for character in line:
-                new_cell = Cell(self._unassigned[0],x,y)
+                new_group = None
+                count = Island.character_to_count(character)
+                if count:
+                    new_group = Island(self, count = count)
+                    self._islands.append(new_group)
+                else:
+                    new_group = Unassigned(self)
+                    self._unassigned.append(new_group)
+                new_cell = Cell(new_group,x,y)
                 board_row.append(new_cell)
                 if x>0:
                     previous_cell = board_row[x-1]
@@ -294,8 +310,6 @@ class Board():
                     above_cell = board_rows[y-1][x]
                     new_cell.add_liberty(above_cell)
                     above_cell.add_liberty(new_cell)
-                if character.isdigit():
-                    self.create_new_island(new_cell, count = int(character))
                 x += 1
             board_rows.append(board_row)
             y += 1
@@ -319,25 +333,26 @@ class Board():
 
     def create_new_nurikabe(self, starting_cell):
         print("  creating new nurikabe group at",starting_cell.coords)
-        new_nurikabe = Nurikabe(self, starting_cell)
-        self._nurikabe.append(new_nurikabe)
+        new_group = Nurikabe(self)
+        self._nurikabe.append(new_group)
+        starting_cell.group = new_group
         # if there was only one nurakabe, it had no reason to grow so it would have ignored an update.  so tell it to wake up.
         if len(self._nurikabe)==2:
             self._nurikabe[0].update()
 
-    def create_new_island(self, starting_cell, count=None):
-        print("  creating new island group at",starting_cell.coords)
-        new_island = Island(self, starting_cell,count)
-        if count is None:
-            self._orphan_islands.append(new_island)
-        else:
-            self._islands.append(new_island)
+    def create_new_orphan_island(self, starting_cell):
+        print("  creating new orphan island group at",starting_cell.coords)
+        new_group = Island(self)
+        self._orphan_islands.append(new_group)
+        starting_cell.group = new_group
         
     def del_group(self,empty_group):
         if type(empty_group) is Island:
             self._orphan_islands.remove(empty_group)
         if type(empty_group) is Nurikabe:
             self._nurikabe.remove(empty_group)
+        if type(empty_group) is Unassigned:
+            self._unassigned.remove(empty_group)
 
     def queue_nurikabe_cell(self,queue_cell):
         if queue_cell not in self._nurikabe_cell_queue:
@@ -358,7 +373,7 @@ class Board():
             return False
         if self._islands or self._orphan_islands:
             return False
-        if self._unassigned[0].members:
+        if self._unassigned:
             return False
         return True
 
@@ -381,13 +396,14 @@ class Board():
 
     def quick_mark_cant_reach(self):
         print("checking quick can't reach")
-        for each_cell in self._unassigned[0].members:
-            can_be_reached = False
-            for each_island in self._islands:
-                if each_island.quick_can_reach(each_cell):
-                    can_be_reached = True
-            if not can_be_reached:
-                self.queue_nurikabe_cell(each_cell)
+        for each_unassigned in self._unassigned:
+            for each_cell in each_unassigned.members:
+                can_be_reached = False
+                for each_island in self._islands:
+                    if each_island.quick_can_reach(each_cell):
+                        can_be_reached = True
+                if not can_be_reached:
+                    self.queue_nurikabe_cell(each_cell)
         self.clear_cell_queue()
     
     def clear_cell_queue(self):
@@ -427,7 +443,7 @@ class Board():
 
 
 def main():
-    board_str = '''\
+    board_str1 = '''\
 3--
 ---
 3--\
@@ -477,7 +493,52 @@ def main():
 --1-----------1----1
 1---1-2--2--1-------\
 '''
-    this_board = Board(board_str_lines=board_str5.split('\n'))
+    board_str6 = '''\
+2--2--3--3-1-2-3-1-3
+--------------------
+2--3-4-----1--------
+--------3-7--2--3---
+c-3------------5--2-
+-----2--------------
+-------2-1----------
+----1-----2---3-----
+-----1--1---1----3--
+2------1---1----1---
+--------3---1----1-2
+-3----2----1-3------
+---3----1-------4---
+---------5-1-5-2---2
+--3--1-1------------
+1-----4-------------
+-2--1----4------2--3
+---1---------2-4----
+----1-1-------------
+3-------4-----------\
+'''
+    board_str7 = '''\
+1-3-3---2-3--4--2-1-
+--------------------
+1---3-3--1---------3
+-----------3----4---
+8-----2-2-3--2------
+-----------------2--
+2----1------2--1---3
+------1-2-1---1-----
+-1---------2---4----
+---3--9--1---1------
+3-2--1----2---1-3--3
+----3-------3-------
+----------1----3----
+-7---------1--------
+-----3------1-1-----
+2------2--6----3-6--
+-----1------2-------
+-1--4--------------3
+--1-----3-----1-----
+1---------------2---\
+'''
+
+    this_board = Board(board_str_lines=board_str7.split('\n'))
     print(this_board)
     this_board.solve()
 
