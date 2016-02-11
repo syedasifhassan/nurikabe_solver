@@ -289,6 +289,12 @@ class Island(ExclusiveGroup):
                         if each_path.terminated or each_path.get_path_length()+len(new_orphan.members)+1>self.missing_cell_count():
                             print("      nope, removing it")
                             self._paths.remove(each_path)
+    def replace_required_orphans(self,old_orphan,new_orphan):
+        if old_orphan in self.required_absorbed_orphans:
+            self._required_absorbed_orphans.remove(old_orphan)
+            self._required_absorbed_orphans.add(new_orphan)
+            # this occurrence is so rare, just invalidate the paths so they will be recalculated
+            self._paths = None
 
     def add_member(self,new_cell):
         if not self._members:
@@ -393,8 +399,20 @@ class Island(ExclusiveGroup):
             if not each_path.members.intersection(cells_blocked):
                 return False
         return True 
-    def remove_paths_excluded_by_other_island_paths(self,other_island):
-        return False
+    def remove_paths_containing_blocked_cells(self,blocked_cells):
+        removed_something = False
+        P = len(self._paths)
+        while P:
+            P-=1
+            each_path = self._paths[P]
+            if each_path.members.intersection(blocked_cells):
+                print("  removing",each_path,"from",self)
+                removed_something = True
+                self._paths.remove(each_path)
+        return removed_something
+    @property
+    def cells_blocked(self):
+        return Path.common_cells_blocked_by_all_paths(self.paths)
     
 class Nurikabe(ExclusiveGroup):        
     def get_display_char(self, requesting_cell):
@@ -532,6 +550,11 @@ class OrphanIsland(TemporaryExclusiveGroup):
             for each_liberty in liberties:
 #                 print("    orphan island",str(self),"has only one liberty",each_liberty.coords)
                 self.board.queue_island_cell(each_liberty)
+    def merge_with(self,other_group):
+        # rare possibility, but it could happen
+        if type(other_group) is OrphanIsland:
+            self.board.replace_required_orphans(self,other_group)
+        super().merge_with(other_group)
 
 
 class Path(CellGroup):
@@ -545,6 +568,9 @@ class Path(CellGroup):
         self.check_terminated()
     @property
     def all_members(self):
+        return self.members
+    @property
+    def cells_blocked(self):
         return self.members
     def get_path_length(self):
         return len(self.members)
@@ -586,6 +612,17 @@ class Path(CellGroup):
                 P-=1
                 common.intersection_update(paths[P].liberties)
         return common
+    @classmethod
+    def common_cells_blocked_by_all_paths(cls,paths):
+        common = set([])
+        if paths:
+            common.update(paths[0].cells_blocked)
+            P = len(paths)
+            while P>1:
+                P-=1
+                common.intersection_update(paths[P].cells_blocked)
+        return common
+        
 
 
 class IslandPath(Path):
@@ -792,12 +829,12 @@ class Board():
         solution_steps = [self.close_completed_islands,
                           self.build_island_paths,
                           self.island_path_overlaps,
+                          self.remove_island_paths_blocking_nurikabe_liberties,
+                          self.check_island_paths_excluding_other_island_paths,
                           self.calculate_slow_can_reach,
                           self.mark_cant_reach,
                           self.mark_must_reach,
-                          self.increment_island_path_length,
-                          self.remove_island_paths_blocking_nurikabe_liberties,
-                          self.check_island_paths_excluding_other_island_paths]
+                          self.increment_island_path_length]
         self._current_island_path_length = 1
         solution_step_index = 0
         while solution_step_index<len(solution_steps):
@@ -844,6 +881,10 @@ class Board():
                 if each_orphan not in mandatory_island.required_absorbed_orphans:
                     mandatory_island.add_required_absorbed_orphan(each_orphan)
                     mandatory_island.path_overlaps()
+    
+    def replace_required_orphans(self,old_orphan,new_orphan):
+        for each_island in self._islands:
+            each_island.replace_required_orphans(old_orphan,new_orphan)
     
     def calculate_slow_can_reach(self):
         print()
@@ -895,11 +936,12 @@ class Board():
         did_something = False
         # note that the action is not symmetric, so we're not doing each pair twice here
         for each_island in self._islands:
+            cells_blocked = each_island.cells_blocked
             for each_other_island in self._islands:
                 if each_other_island is each_island: continue
                 did_something |= each_island.remove_paths_excluding_other_island_paths(each_other_island)
                 if not each_other_island.all_paths_terminated(): continue
-                did_something |= each_island.remove_paths_excluded_by_other_island_paths(each_other_island)
+                did_something |= each_other_island.remove_paths_containing_blocked_cells(cells_blocked)
         self.report_paths()
         return did_something
 
@@ -1188,8 +1230,25 @@ a-1-2-3--2-1
 4------2-2--
 ------------\
 '''
+    board_str17 = '''\
+4-3--1-1-2--1--
+-------------2-
+----3-3---6----
+--2------2-----
+1-----3--------
+----------2----
+8---4-------1-2
+-------3---2---
+4----2---8---3-
+---------------
+------3----1---
+--3--2---------
+--------------3
+1-----3--1-----
+--3--------2---\
+'''
 
-    this_board = Board(board_str_lines=board_str7.split('\n'))
+    this_board = Board(board_str_lines=board_str17.split('\n'))
     print(this_board)
     this_board.solve()
 
