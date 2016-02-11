@@ -88,11 +88,21 @@ class Cell():
 #         print("becoming island cell at",self.coords)
         if type(self.group) is Island: return
 #         print("  searching through",len(self.liberties),"liberties",self.liberty_coords)
+        # to avoid problems keeping track of required orphans, join any adjacent islands first
+        for each_liberty in list(self.liberties):
+#             print("  cell at",self.coords,"has a liberty of type",type(each_liberty.group),"at",each_liberty.coords)
+            if type(each_liberty.group) is Island:
+                self.mutually_connect_to(each_liberty)
+                if self.group == each_liberty.group: continue
+                if type(self.group) is Unassigned:
+                    self.group=each_liberty.group
+                else:
+                    self.group.merge_with(each_liberty.group)
         for each_liberty in list(self.liberties):
 #             print("  cell at",self.coords,"has a liberty of type",type(each_liberty.group),"at",each_liberty.coords)
             if type(each_liberty.group) is Nurikabe:
                 self.mutually_disconnect_from(each_liberty)
-            if type(each_liberty.group) is Island or type(each_liberty.group) is OrphanIsland:
+            if type(each_liberty.group) is OrphanIsland:
                 self.mutually_connect_to(each_liberty)
                 if self.group == each_liberty.group: continue
                 if type(self.group) is Unassigned:
@@ -645,6 +655,8 @@ class IslandPath(Path):
                 missing_required_orphans = self.group.required_absorbed_orphans - self._absorbed_orphans - new_absorbed_orphans
                 # check that the path length is not exceeded, or is impossible given missing orphans (note: must add not only the size of the missing orphans, but one extra cell to connect to one or more missing orphans iff there is at least one missing orphan - hence the int(bool(missing_required_orphans)))
                 if self.get_path_length() + 1 + self.get_absorbed_orphan_count(new_absorbed_orphans) + self.get_absorbed_orphan_count(missing_required_orphans)+int(bool(missing_required_orphans))>self.group.missing_cell_count():
+                    if self.group.count==8:
+                        print("here")
                     can_extend=False
                 if can_extend:
                     new_path_members = self.members.copy()
