@@ -186,6 +186,8 @@ class ExclusiveGroup(CellGroup):
                 each_path.update_liberties()
         first_path = None
         while first_path is None or self._paths[0] is not first_path:
+            if not self.paths:
+                print("Error! no paths left to extend in",self)
             if first_path is None:
                 first_path = self._paths[0]
             next_path = self._paths.popleft()
@@ -220,11 +222,10 @@ class ExclusiveGroup(CellGroup):
         
     def all_paths_terminated(self):
         if self._paths is None: return False
-        terminated = True
         for each_path in self._paths:
             if not each_path.terminated:
-                terminated = False
-        return terminated
+                return False
+        return True
     
     def invalidate_paths(self,changing_cell):
         if self._paths is None: return
@@ -239,6 +240,7 @@ class Island(ExclusiveGroup):
         super().__init__(board)
         self._count=count
         self._starting_cell = None
+        self._required_absorbed_orphans = set([])
 
     def get_display_char(self, requesting_cell):
         if (self.starting_cell is requesting_cell):
@@ -260,6 +262,23 @@ class Island(ExclusiveGroup):
     @property
     def count(self):
         return self._count
+    @property
+    def required_absorbed_orphans(self):
+        return self._required_absorbed_orphans
+    def add_required_absorbed_orphan(self,new_orphan):
+        if new_orphan not in self._required_absorbed_orphans:
+            print("  adding new required orphan",new_orphan,"to",self)
+            self._required_absorbed_orphans.add(new_orphan)
+            if self._paths is not None:
+                P = len(self._paths)
+                while P:
+                    P-=1
+                    each_path = self._paths[P]
+                    print("    checking path",each_path)
+                    if new_orphan not in each_path.absorbed_orphans:
+                        if each_path.terminated or each_path.get_path_length()+len(new_orphan.members)+1>self.missing_cell_count():
+                            print("      nope, removing it")
+                            self._paths.remove(each_path)
 
     def add_member(self,new_cell):
         if not self._members:
@@ -267,8 +286,9 @@ class Island(ExclusiveGroup):
         super().add_member(new_cell)
 
     def merge_with(self,other_group):
-        # Note: assuming other group is an orphan
         if type(other_group) is OrphanIsland:
+            if other_group in self._required_absorbed_orphans:
+                self._required_absorbed_orphans.remove(other_group)
             other_group.merge_with(self)
         else:
             print("Error! tried to merge island",self,"with non-orphan island",other_group)
@@ -295,6 +315,7 @@ class Island(ExclusiveGroup):
         if self.close_completed(): return
         liberties = self.liberties
 #         print("  island",str(self),"has",len(liberties),"liberties",self.liberty_coords)
+        # Note: path overlap logic will do a more sophisticated version of these three checks, so they can be removed (but this is faster)
         if len(liberties)==1:
             for each_liberty in liberties:
 #                 print("    island",str(self),"has only one liberty",each_liberty.coords)
@@ -321,6 +342,49 @@ class Island(ExclusiveGroup):
     
     def make_new_path(self,members,absorbed_orphans=None):
         return IslandPath(self.board,self,members,absorbed_orphans)
+    def add_path_left(self,members,absorbed_orphans=None):
+        if not self.path_is_duplicate(members):
+            self._paths.appendleft(self.make_new_path(members,absorbed_orphans))
+    def path_overlaps(self):
+        common = Path.common_to_all_paths(self.paths)
+        for each_cell in common:
+            # problem: this forgets that the new island cell must connect to this island - need to remember that and tell the new orphan island (if any)
+            self.board.queue_island_cell(each_cell)
+        common = Path.common_neighbor_to_all_paths(self.paths)
+        for each_cell in common:
+            self.board.queue_nurikabe_cell(each_cell)
+    def remove_paths_blocking_nurikabe_liberties(self,each_nurikabe):
+        removed_something = False
+        P = len(self._paths)
+        while P:
+            P-=1
+            each_path = self._paths[P]
+            if not each_nurikabe.liberties - each_path.members:
+                print("  removing",each_path,"from",self)
+                removed_something = True
+                self._paths.remove(each_path)
+#         if removed_something:
+#             self.path_overlaps()
+        return removed_something
+    def remove_paths_excluding_other_island_paths(self,other_island):
+        removed_something = False
+        P = len(self._paths)
+        while P:
+            P-=1
+            each_path = self._paths[P]
+            if other_island.all_paths_are_blocked_by_other_island_path(each_path):
+                print("  removing",each_path,"from",self)
+                removed_something = True
+                self._paths.remove(each_path)
+        return removed_something
+    def all_paths_are_blocked_by_other_island_path(self,other_path):
+        cells_blocked = other_path.cells_blocked
+        for each_path in self._paths:
+            if not each_path.members.intersection(cells_blocked):
+                return False
+        return True 
+    def remove_paths_excluded_by_other_island_paths(self,other_island):
+        return False
     
 class Nurikabe(ExclusiveGroup):        
     def get_display_char(self, requesting_cell):
@@ -344,6 +408,7 @@ class Nurikabe(ExclusiveGroup):
                 for each_liberty in liberties:
 #                     print("  nurikabe has only one liberty",each_liberty.coords)
                     self.board.queue_nurikabe_cell(each_liberty)
+
 
 class TemporaryExclusiveGroup(ExclusiveGroup):
     def __init__(self,board):
@@ -387,10 +452,14 @@ class TemporaryExclusiveGroup(ExclusiveGroup):
                     return
 #                 print("      checking",each_path)
                 if can_reach: continue
-                if self.members.intersection(each_path.all_members) == self.members:
+                if self.members.intersection(self.get_relevant_members_from_path(each_path)) == self.members:
                     can_reach=True
             if can_reach:
                 self._can_reach_islands.append(each_island)
+
+    def get_relevant_members_from_path(self,possible_path):
+        # to be safe, get absorbed orphans too
+        return possible_path.all_members
                     
     def can_reach_island(self,possible_island):
         # will return a quick answer if full answer is not available yet, so it errs on the side of True
@@ -410,6 +479,9 @@ class Unassigned(TemporaryExclusiveGroup):
         return '-'
     def get_can_reach_islands(self):
         return self._can_reach_islands
+    def get_relevant_members_from_path(self,possible_path):
+        # for Unassigned, save time by not bothering with absorbed orphans
+        return possible_path.members
     def can_reach_any_island(self):
         # will return a quick answer if full answer is not available yet, so it errs on the side of True
         if self._can_reach_islands is None:
@@ -422,6 +494,7 @@ class Unassigned(TemporaryExclusiveGroup):
                 return True
         return False
 
+
 class OrphanIsland(TemporaryExclusiveGroup):
     def __init__(self,board,can_reach_islands=None):
         self._can_reach_islands = can_reach_islands
@@ -429,6 +502,17 @@ class OrphanIsland(TemporaryExclusiveGroup):
         super().__init__(board)
     def get_display_char(self, requesting_cell):
         return 'O'
+    def get_mandatory_island(self):
+        if self._can_reach_islands is None:
+            if self._quick_can_reach_islands is None:
+                self.calculate_quick_can_reach()
+            if len(self._quick_can_reach_islands) == 1:
+                return self._quick_can_reach_islands[0]
+        else:
+            if len(self._can_reach_islands) == 1:
+                return self._can_reach_islands[0]
+        return None
+            
     def update(self):
         print("updating group",str(self))
         self._changed=False
@@ -452,6 +536,8 @@ class Path(CellGroup):
     @property
     def all_members(self):
         return self.members
+    def get_path_length(self):
+        return len(self.members)
     @property
     def group(self):
         return self._group
@@ -495,7 +581,7 @@ class Path(CellGroup):
 class IslandPath(Path):
     def __init__(self,board,group,starting_cells,absorbed_orphans=None):
         if absorbed_orphans is None:
-            self._absorbed_orphans = []
+            self._absorbed_orphans = set([])
         else:
             self._absorbed_orphans = absorbed_orphans
         super().__init__(board,group,starting_cells)
@@ -510,11 +596,19 @@ class IslandPath(Path):
             all_members.update(each_orphan.members)
         return all_members
     @property
+    def cells_blocked(self):
+        cells_blocked = self.all_members
+        if self.terminated:
+            cells_blocked.update(self.liberties)
+        return cells_blocked
+    @property
     def absorbed_orphans(self):
         return self._absorbed_orphans
-    def get_absorbed_orphan_count(self):
+    def get_absorbed_orphan_count(self,orphan_set=None):
+        if orphan_set is None:
+            orphan_set = self._absorbed_orphans
         count = 0
-        for each_orphan in self._absorbed_orphans:
+        for each_orphan in orphan_set:
             count += len(each_orphan.members)
         return count
     def get_path_length(self):
@@ -538,7 +632,7 @@ class IslandPath(Path):
             if type(each_liberty.group) is Unassigned:
 #                 print("    trying liberty",each_liberty.coords)
                 can_extend = True
-                absorbed_orphan = None
+                new_absorbed_orphans = set([])
                 for each_next_liberty in each_liberty.liberties:
                     if each_next_liberty in self.members: continue
                     if type(each_next_liberty.group) is Island:
@@ -546,18 +640,19 @@ class IslandPath(Path):
                             can_extend = False
                     else:
                         if type(each_next_liberty.group) is OrphanIsland:
-                            if len(self.members)+1+len(each_next_liberty.group.members)+self.get_absorbed_orphan_count()>self.group.missing_cell_count():
-                                can_extend=False
-                            else:
-                                absorbed_orphan = each_next_liberty.group
+                            if each_next_liberty.group not in self._absorbed_orphans:
+                                new_absorbed_orphans.update([each_next_liberty.group])
+                missing_required_orphans = self.group.required_absorbed_orphans - self._absorbed_orphans - new_absorbed_orphans
+                # check that the path length is not exceeded, or is impossible given missing orphans (note: must add not only the size of the missing orphans, but one extra cell to connect to one or more missing orphans iff there is at least one missing orphan - hence the int(bool(missing_required_orphans)))
+                if self.get_path_length() + 1 + self.get_absorbed_orphan_count(new_absorbed_orphans) + self.get_absorbed_orphan_count(missing_required_orphans)+int(bool(missing_required_orphans))>self.group.missing_cell_count():
+                    can_extend=False
                 if can_extend:
                     new_path_members = self.members.copy()
                     new_path_members.add(each_liberty)
-                    new_absorbed_orphans = list(self._absorbed_orphans)
+                    new_path_absorbed_orphans = self._absorbed_orphans.copy()
 #                     print("    making new path",self,"with",each_liberty.coords)
-                    if absorbed_orphan is not None and absorbed_orphan not in new_absorbed_orphans:
-                        new_absorbed_orphans.append(absorbed_orphan)
-                    self.group.add_path_left(new_path_members,absorbed_orphans = new_absorbed_orphans)
+                    new_path_absorbed_orphans.update(new_absorbed_orphans)
+                    self.group.add_path_left(new_path_members,absorbed_orphans = new_path_absorbed_orphans)
 
 
 class Board():
@@ -571,6 +666,8 @@ class Board():
         self._unassigned = []
         self._island_cell_queue = deque()
         self._nurikabe_cell_queue = deque()
+        self._current_island_path_length = 0
+        self._current_nurikabe_path_length = 0
         print("initializing board")
         board_rows = []
         y=0
@@ -680,28 +777,33 @@ class Board():
         self.clear_cell_queue()
         print()
         print("starting path iteration..............................................")
-        island_path_length = 1
-        while island_path_length<=self.get_max_island_path_length():
-            self.close_completed_islands()
+        solution_steps = [self.close_completed_islands,
+                          self.build_island_paths,
+                          self.island_path_overlaps,
+                          self.calculate_slow_can_reach,
+                          self.mark_cant_reach,
+                          self.mark_must_reach,
+                          self.increment_island_path_length,
+                          self.remove_island_paths_blocking_nurikabe_liberties,
+                          self.check_island_paths_excluding_other_island_paths]
+        self._current_island_path_length = 1
+        solution_step_index = 0
+        while solution_step_index<len(solution_steps):
+            print("on step",solution_step_index)
+            if solution_steps[solution_step_index]():
+                # a solution step function should return true if it changed something important without queuing cells - e.g. incrementing path lengths
+                solution_step_index = 0
+                continue
             if self.has_queued_cells():
                 self.clear_cell_queue()
+                solution_step_index = 0
                 continue
-            self.build_island_paths(island_path_length)
-            self.island_path_overlap_logic()
-            if self.has_queued_cells():
-                self.clear_cell_queue()
-                continue
-            self.calculate_slow_can_reach()
-            self.mark_cant_reach()
-            if self.has_queued_cells():
-                self.clear_cell_queue()
-                continue
-            island_path_length += 1
+            solution_step_index +=1
         print(self)
         if self.is_solved():
             print("solved!  :)")
         else:
-            print("not solved!  :(")
+            print("not solved!  :( ",len(self._unassigned),"unassigned cells")
         elapsed_time = time.clock()-start_time
         print ("elapsed time: {:.3f} ms.".format(elapsed_time*1000))
         
@@ -722,49 +824,72 @@ class Board():
             if not each_unassigned.can_reach_any_island():
                 for each_cell in each_unassigned.members:
                     self.queue_nurikabe_cell(each_cell)
+
+    def mark_must_reach(self):
+        for each_orphan in self._orphan_islands:
+            mandatory_island = each_orphan.get_mandatory_island()
+            if mandatory_island is not None:
+                if each_orphan not in mandatory_island.required_absorbed_orphans:
+                    mandatory_island.add_required_absorbed_orphan(each_orphan)
+                    mandatory_island.path_overlaps()
+    
     def calculate_slow_can_reach(self):
         print()
         print("calculating slow can reach")
-        for each_unassigned in self._unassigned:
+        for each_unassigned in itertools.chain(self._unassigned,self._orphan_islands):
             each_unassigned.calculate_can_reach()
         
-    def build_island_paths(self,length):
+    def build_island_paths(self):
+        print("  building paths of length",self._current_island_path_length)
+        length = self._current_island_path_length
         for each_island in self._islands:
             each_island.extend_paths_to(length)
+
+    def increment_island_path_length(self):
+        if self._current_island_path_length < self.get_max_island_path_length():
+            self._current_island_path_length += 1
+            return True
+
+    def increment_nurikabe_path_length(self):
+        pass
+
+    def report_paths(self):
         print()
         for each_island in self._islands:
             print("built paths for island",each_island)
-            for each_path in each_island.paths:
-                print("  path",each_path)
+            if each_island.paths is None:
+                print("  no paths")
+            else:
+                for each_path in each_island.paths:
+                    print("  path",each_path)
 
-    def island_path_overlap_logic(self):
+    def island_path_overlaps(self):
         for each_island in self._islands:
-            common = Path.common_to_all_paths(each_island.paths)
-            for each_cell in common:
-                self.queue_island_cell(each_cell)
-            common = Path.common_neighbor_to_all_paths(each_island.paths)
-            for each_cell in common:
-                self.queue_nurikabe_cell(each_cell)        
+            each_island.path_overlaps()
 
-    def connect_single_path_orphans(self):
-        # check if every path is complete - otherwise return
-        # also record if it must be connected to a particular island.
-        # perhaps intersect all paths to that island
-        # or enter restriction on paths when they are generated by island
-        for each_orphan in self._orphan_islands:
-            self.connect_single_path_orphan(each_orphan)
-                            
-    def connect_single_path_orphan(self,each_orphan):
-        island_path_can_reach = None
+    def remove_island_paths_blocking_nurikabe_liberties(self):
+        self.report_paths()
+        print("removing island paths that block all nurikabe liberties")
+        did_something = False
+        for each_nurikabe in self._nurikabe:
+            for each_island in self._islands:
+                did_something |= each_island.remove_paths_blocking_nurikabe_liberties(each_nurikabe)
+        self.report_paths()
+        return did_something
+    
+    def check_island_paths_excluding_other_island_paths(self):
+        self.report_paths()
+        print("removing island paths that block all of another island's paths and island paths blocked by all of another island's paths")
+        did_something = False
+        # note that the action is not symmetric, so we're not doing each pair twice here
         for each_island in self._islands:
-            for each_path in each_island.paths:
-                if each_orphan in each_path.absorbed_orphans:
-                    if island_path_can_reach is not None:
-                        return
-                    island_path_can_reach = each_path
-        if island_path_can_reach is not None:
-            for each_cell in island_path_can_reach.members:
-                self.queue_island_cell(each_cell)
+            for each_other_island in self._islands:
+                if each_other_island is each_island: continue
+                did_something |= each_island.remove_paths_excluding_other_island_paths(each_other_island)
+                if not each_other_island.all_paths_terminated(): continue
+                did_something |= each_island.remove_paths_excluded_by_other_island_paths(each_other_island)
+        self.report_paths()
+        return did_something
 
     def has_queued_cells(self):
         if self._island_cell_queue or self._nurikabe_cell_queue: return True
@@ -980,6 +1105,76 @@ c-3------------5--2-
 4--1--------
 ----3-------
 ---1---1-1-1\
+'''
+    board_str12 = '''\
+4-2-4---3--3
+------------
+---3--------
+--3-----1-3-
+-----3------
+3---4--5----
+------------
+--2-------1-
+------------
+4----3--3--3
+------------
+4----2--2---\
+'''
+    board_str13 = '''\
+2--2--1-2--2
+------------
+2--2-2-3----
+------------
+4---2-----4-
+------3--2-1
+4-----------
+-----2--1-1-
+------1-----
+3-3--3--2---
+----------3-
+--------1---\
+'''
+    board_str14 = '''\
+a-1-2-3--2-1
+------------
+---3--------
+------2--4--
+-----2------
+---2---5--1-
+---------1--
+1-2-3-----1-
+------------
+1--2--3--1-1
+-1---1------
+---------1-1\
+'''
+    board_str15 = '''\
+1-4--1-1-2--
+------------
+4---2--3-3--
+------------
+---3-1---3--
+4-----3-----
+---------3--
+--1-3-1----4
+3------3----
+---2--------
+-----2---1--
+2-----------\
+'''
+    board_str16 = '''\
+6-1-2--3--3-
+------------
+-------2----
+----4----2--
+1-1--------1
+-2---3--3---
+---1-------1
+--4--1------
+1-----4----1
+----3-------
+4------2-2--
+------------\
 '''
 
     this_board = Board(board_str_lines=board_str7.split('\n'))
