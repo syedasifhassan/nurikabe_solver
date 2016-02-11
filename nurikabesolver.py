@@ -692,8 +692,6 @@ class IslandPath(Path):
                 missing_required_orphans = self.group.required_absorbed_orphans - self._absorbed_orphans - new_absorbed_orphans
                 # check that the path length is not exceeded, or is impossible given missing orphans (note: must add not only the size of the missing orphans, but one extra cell to connect to one or more missing orphans iff there is at least one missing orphan - hence the int(bool(missing_required_orphans)))
                 if self.get_path_length() + 1 + self.get_absorbed_orphan_count(new_absorbed_orphans) + self.get_absorbed_orphan_count(missing_required_orphans)+int(bool(missing_required_orphans))>self.group.missing_cell_count():
-                    if self.group.count==8:
-                        print("here")
                     can_extend=False
                 if can_extend:
                     new_path_members = self.members.copy()
